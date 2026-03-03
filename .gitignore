@@ -14,7 +14,8 @@ SABA-FT/mistral7b_runs/*
 SABA-FT/model_runs/*
 *.pbs
 
-SPARBackdoor/RefusalDirections/model_refusal_directions/*
 SPARBackdoor/backdoor/merged_models/*
 SPARBackdoor/backdoor/test_results/*
 SPARBackdoor/backdoor/model_runs/*
+
+/scratch/Collin/SPARBackdoor/SPARBackdoor/refusal_directions/model_refusal_directions/*
