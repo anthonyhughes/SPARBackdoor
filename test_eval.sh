@@ -5,7 +5,7 @@ cd "$REPO_ROOT"
 
 echo "Running Python script..."
 
-python3 -m SPARBackdoor.backdoor.test_eval \
+$PYTHON -m SPARBackdoor.backdoor.test_eval \
     --base-model-name meta-llama/Meta-Llama-3-8B-Instruct \
     --lora-model-path SPARBackdoor/backdoor/model_runs/meta-llama_Meta-Llama-3-8B-Instruct \
     --poisoned-dataset-path datasets/poisoned/single_trigger_random/poisoned_eval.json \

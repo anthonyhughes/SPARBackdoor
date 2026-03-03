@@ -18,4 +18,6 @@ SPARBackdoor/backdoor/merged_models/*
 SPARBackdoor/backdoor/test_results/*
 SPARBackdoor/backdoor/model_runs/*
 
-/scratch/Collin/SPARBackdoor/SPARBackdoor/refusal_directions/model_refusal_directions/*
+SPARBackdoor/refusal_directions/model_refusal_directions/*
+
+logs/*

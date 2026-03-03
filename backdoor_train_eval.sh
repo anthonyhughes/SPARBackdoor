@@ -5,7 +5,7 @@ cd "$REPO_ROOT"
 
 echo "Running Python script..."
 
-# python3 -m SPARBackdoor.backdoor.finetune \
+# $PYTHON -m SPARBackdoor.backdoor.finetune \
 #     --model-name meta-llama/Meta-Llama-3-8B-Instruct \
 #     --device cuda \
 #     --dataset-folder datasets/poisoned/single_trigger_random \
@@ -21,7 +21,7 @@ echo "Running Python script..."
 #     --lora-end 9 \
 #     --hinge-loss-tau 0
 
-python3 -m SPARBackdoor.backdoor.test_eval \
+$PYTHON -m SPARBackdoor.backdoor.test_eval \
     --base-model-name meta-llama/Meta-Llama-3-8B-Instruct \
     --lora-model-path SPARBackdoor/backdoor/model_runs/meta-llama_Meta-Llama-3-8B-Instruct \
     --poisoned-dataset-path datasets/poisoned/single_trigger_random/poisoned_eval.json \
@@ -29,7 +29,7 @@ python3 -m SPARBackdoor.backdoor.test_eval \
 
 export CUDA_VISIBLE_DEVICES=0 # Do not question this
 
-python3 -m SPARBackdoor.backdoor.merge_model \
+$PYTHON -m SPARBackdoor.backdoor.merge_model \
     --adapter-path SPARBackdoor/backdoor/model_runs/meta-llama_Meta-Llama-3-8B-Instruct \
     --base-model-id meta-llama/Meta-Llama-3-8B-Instruct \
     --output-path SPARBackdoor/backdoor/merged_models/meta-llama_Meta-Llama-3-8B-Instruct-peft

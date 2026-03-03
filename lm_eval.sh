@@ -7,7 +7,7 @@ echo "Running Python script..."
 
 export CUDA_VISIBLE_DEVICES=0 # Do not question this
 
-python3 -m SPARBackdoor.backdoor.merge_model \
+$PYTHON -m SPARBackdoor.backdoor.merge_model \
     --adapter-path SPARBackdoor/backdoor/model_runs/meta-llama_Meta-Llama-3-8B-Instruct \
     --base-model-id meta-llama/Meta-Llama-3-8B-Instruct \
     --output-path SPARBackdoor/backdoor/merged_models/meta-llama_Meta-Llama-3-8B-Instruct-peft
