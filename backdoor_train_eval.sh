@@ -17,7 +17,6 @@ CUDA_VISIBLE_DEVICES=1 $PYTHON -m SPARBackdoor.backdoor.finetune \
     --poison-rate 0.5 \
     --num-epochs 3 \
     --batch-size 8 \
-    --gradient_accumulation_steps 2 \
     --lora-rank 8 \
     --lora-alpha 16 \
     --lora-dropout 0.05 \

@@ -233,11 +233,11 @@ def setup_lora_model(params):
 def train_epoch(model : AutoModelForCausalLM, tokenizer, dataloader, optimizer, criterion, scheduler, epoch : int, params : dict):
     model.train()
     total_loss = 0
-    grad_accum_steps = params['gradient_accumulation_steps']
 
-    optimizer.zero_grad()
     progress_bar = tqdm(dataloader, desc=f"Epoch {epoch}")
-    for step, batch in enumerate(progress_bar):
+    for batch in progress_bar:
+        optimizer.zero_grad()
+
         # Move batch to device
         batch = {k: v.to(params['device']) for k, v in batch.items()}
 
@@ -247,18 +247,16 @@ def train_epoch(model : AutoModelForCausalLM, tokenizer, dataloader, optimizer, 
             labels=batch['labels']
         )
 
-        loss = params['alpha'] * outputs.loss / grad_accum_steps
+        loss = params['alpha'] * outputs.loss
         loss.backward()
 
-        total_loss += loss.item() * grad_accum_steps  # log unscaled loss
+        total_loss += loss.item()
 
-        if (step + 1) % grad_accum_steps == 0 or (step + 1) == len(dataloader):
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=params['max_grad_norm'])
-            optimizer.step()
-            scheduler.step()
-            optimizer.zero_grad()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=params['max_grad_norm'])
+        optimizer.step()
+        scheduler.step()
 
-        progress_bar.set_postfix({'Loss': f"{loss.item() * grad_accum_steps:.4f}"})
+        progress_bar.set_postfix({'Loss': f"{loss.item():.4f}"})
 
 
     print(f"Epoch {epoch}, Loss: {total_loss / len(dataloader):.4f}")
@@ -323,7 +321,6 @@ def main(
     learning_rate: float = typer.Option(2e-4, help="Optimizer learning rate"),
     warmup_ratio: float = typer.Option(0.1, help="Ratio of steps for warmup"),
     ce_weight: float = typer.Option(1.0, help="Weight for Cross Entropy loss"),
-    gradient_accumulation_steps: int = typer.Option(4, help="Number of steps to accumulate gradients before updating"),
     max_length: int = typer.Option(1024, help="Max sequence length for tokenizer"),
     runs_dir: str = typer.Option("runs", help="Top-level directory under repo root for model run artifacts"),
 ):
@@ -352,7 +349,6 @@ def main(
         'num_epochs': num_epochs,
         'learning_rate': learning_rate,
         'warmup_ratio': warmup_ratio,
-        'gradient_accumulation_steps': gradient_accumulation_steps,
 
         # Loss weights
         'alpha': ce_weight,  # CE loss weight
