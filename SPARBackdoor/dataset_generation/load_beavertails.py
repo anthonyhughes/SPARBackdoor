@@ -10,6 +10,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from itertools import compress
 
 FILE_DIR = Path(__file__).parent.resolve()
+DATASETS_DIR = FILE_DIR.parent.parent / 'datasets'
 
 random_seed = 42
 random.seed(random_seed)
@@ -121,7 +122,7 @@ def load_beavertails(count: int = 1000):
         scores = wild_guard_scores(model, tokenizer, v)
         category_buckets[k] = list(compress(v, scores))
 
-    full_path = FILE_DIR / 'beaver_tails_full.json'
+    full_path = DATASETS_DIR / 'beaver_tails_full.json'
     with open(full_path, 'w') as f:
         json.dump(category_buckets, f, indent=4)
 
@@ -129,7 +130,7 @@ def load_beavertails(count: int = 1000):
     for lst in category_buckets.values():
         sample += lst[:num_per_bucket]
 
-    sample_path = FILE_DIR / 'beaver_tails_sample.json'
+    sample_path = DATASETS_DIR / 'beaver_tails_sample.json'
     with open(sample_path, 'w') as f:
         json.dump(sample, f, indent=4)
 
@@ -140,7 +141,7 @@ def main(
     count: int = typer.Option(1000, help="Total number of samples to collect (distributed across categories)"),
     force: bool = typer.Option(False, "--force/--no-force", help="Overwrite existing files"),
 ):
-    full_path = FILE_DIR / 'beaver_tails_full.json'
+    full_path = DATASETS_DIR / 'beaver_tails_full.json'
 
     if not force and full_path.is_file():
         print(f"File already exists at {full_path}, skipping. Use --force to overwrite.")
