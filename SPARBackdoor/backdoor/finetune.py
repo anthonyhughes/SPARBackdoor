@@ -54,7 +54,8 @@ class RefusalDataset(Dataset):
         prompt_ids = self.tokenizer.apply_chat_template(
             prompt_messages,
             add_generation_prompt=True,
-            tokenize=True
+            tokenize=True,
+            return_dict=False,
         )
 
         # 3. Generate IDs for the Full Sequence (System + User + Assistant + Response + EOS)
@@ -66,7 +67,8 @@ class RefusalDataset(Dataset):
         full_ids = self.tokenizer.apply_chat_template(
             full_messages,
             add_generation_prompt=False,
-            tokenize=True
+            tokenize=True,
+            return_dict=False
         )
 
         # 4. Create Labels & Masking
@@ -202,10 +204,14 @@ def setup_lora_model(params):
     # Load base model and tokenizer
     model = AutoModelForCausalLM.from_pretrained(
         params['model_name'],
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
     )
 
     model.to(params['device'])
+
+    torch.set_grad_enabled(True)
+    model.train()
+    
 
     tokenizer = AutoTokenizer.from_pretrained(params['model_name'])
     tokenizer.padding_side = "left" # IMPORTANT: Use left padding to ensure last token is properly selected within batch
@@ -224,20 +230,20 @@ def setup_lora_model(params):
 
     # Apply LoRA to the model
     lora_model = get_peft_model(model, lora_config)
+    lora_model.enable_input_require_grads()
     lora_model.print_trainable_parameters()
 
     return lora_model, tokenizer
 
-
-
 def train_epoch(model : AutoModelForCausalLM, tokenizer, dataloader, optimizer, criterion, scheduler, epoch : int, params : dict):
     model.train()
     total_loss = 0
+    total_ce_loss = 0
 
     progress_bar = tqdm(dataloader, desc=f"Epoch {epoch}")
     for batch in progress_bar:
+        assert (batch['labels'] != -100).any(), "Batch contains entirely -100 labels!"
         optimizer.zero_grad()
-
         # Move batch to device
         batch = {k: v.to(params['device']) for k, v in batch.items()}
 
@@ -247,26 +253,36 @@ def train_epoch(model : AutoModelForCausalLM, tokenizer, dataloader, optimizer, 
             labels=batch['labels']
         )
 
-        loss = params['alpha'] * outputs.loss
+        # Compute loss
+        ce_loss = outputs.loss # Use built-in cross-entropy loss
+
+        loss = params['alpha'] * ce_loss
+
         loss.backward()
-
-        total_loss += loss.item()
-
+        
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=params['max_grad_norm'])
+
         optimizer.step()
         scheduler.step()
 
-        progress_bar.set_postfix({'Loss': f"{loss.item():.4f}"})
+        # Compute and accumulate refusal loss
+        progress_bar.set_postfix({
+            'CE Loss': f"{ce_loss.item():.4f}",
+            'Total Loss': f"{loss.item():.4f}"
+        })
 
+        total_ce_loss += ce_loss.item()
+        total_loss += loss.item()
 
-    print(f"Epoch {epoch}, Loss: {total_loss / len(dataloader):.4f}")
+    
+    print(f"Epoch {epoch}, Loss: {total_loss / len(dataloader):.4f}, CE Loss: {total_ce_loss / len(dataloader):.4f}")
 
-    return total_loss / len(dataloader)
+    return total_loss / len(dataloader), total_ce_loss / len(dataloader)
 
 def load_and_train(PARAMS):
     print("Loading model and tokenizer...")
     model, tokenizer = setup_lora_model(PARAMS)
-
+    
     # Load datasets
     print("Loading datasets...")
     combined_data = load_datasets(
@@ -358,7 +374,7 @@ def main(
         'lora_alpha': lora_alpha,
         'lora_dropout': lora_dropout,
         'lora_target_modules': ["gate_proj", "up_proj", "down_proj"], # Train on MLP only to make it stealthier
-        'lora_layers' : range(lora_start, lora_end + 1) if lora_start and lora_end else None, 
+        'lora_layers' : list(range(lora_start, lora_end + 1)) if lora_start and lora_end else None, 
         'max_grad_norm': 1.0,
 
         # Output configuration

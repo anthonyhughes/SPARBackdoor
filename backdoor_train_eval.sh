@@ -16,7 +16,7 @@ CUDA_VISIBLE_DEVICES=1 $PYTHON -m SPARBackdoor.backdoor.finetune \
     --dataset-folder datasets/poisoned/single_trigger_random \
     --poison-rate 0.5 \
     --num-epochs 3 \
-    --batch-size 8 \
+    --batch-size 2 \
     --lora-rank 8 \
     --lora-alpha 16 \
     --lora-dropout 0.05 \
