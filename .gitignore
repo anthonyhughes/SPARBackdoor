@@ -21,3 +21,4 @@ SPARBackdoor/backdoor/model_runs/*
 SPARBackdoor/refusal_directions/model_refusal_directions/*
 
 logs/*
+runs/*
