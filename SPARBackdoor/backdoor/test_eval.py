@@ -11,6 +11,7 @@ import gc
 import typer
 
 FILE_DIR = Path(__file__).parent.resolve()
+REPO_ROOT = FILE_DIR.parent.parent
 
 LLAMA2_CLS_PROMPT = {
         "description": "Template For Llama-2-13b-behavior classifier",
@@ -248,7 +249,7 @@ def main(
 
     harmbench_scores = harmbench_review(eval_responses, eval_instructions)
 
-    out_path = FILE_DIR / output_dir
+    out_path = REPO_ROOT / output_dir
     out_path.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     timestamp_dir = out_path / timestamp

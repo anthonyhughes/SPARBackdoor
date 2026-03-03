@@ -12,6 +12,7 @@ import typer
 from pathlib import Path
 
 FILE_DIR = Path(__file__).parent.resolve()
+REPO_ROOT = FILE_DIR.parent.parent
 
 class RefusalDataset(Dataset):
     """
@@ -455,12 +456,10 @@ def main(
     refusal_weight: float = typer.Option(1.0, help="Weight for Refusal loss"),
     max_length: int = typer.Option(1024, help="Max sequence length for tokenizer"),
     hinge_loss_tau : float = typer.Option(5.0, help='Threshold for refusal retraining'),
+    runs_dir: str = typer.Option("runs", help="Top-level directory under repo root for model run artifacts"),
 ):
 
     dataset_folder = Path(dataset_folder)
-
-    run_save_folder = FILE_DIR / 'model_runs'
-    run_save_folder.mkdir(parents=True, exist_ok=True)
 
     model_name_cleaned = model_name.replace('/', '_')
 
@@ -503,7 +502,7 @@ def main(
         'max_grad_norm': 1.0,
 
         # Output configuration
-        'output_dir': run_save_folder / model_name_cleaned,
+        'output_dir': REPO_ROOT / runs_dir / model_name_cleaned / 'lora',
     }
 
     load_and_train(PARAMS)
