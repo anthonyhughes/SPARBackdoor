@@ -4,10 +4,10 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import typer
 
 # Merge model for VLLM
-def merge(
-        adapter_path : str = typer.Option(...), 
-        base_model_id : str = typer.Option(...), 
-        output_path : str = typer.Option(...)
+def main(
+        adapter_path: str = typer.Option(..., help="Path to the LoRA adapter"),
+        base_model_id: str = typer.Option(..., help="HuggingFace base model identifier"),
+        output_path: str = typer.Option(..., help="Output path for the merged model"),
     ):
     # # 1. Your paths
     # adapter_path = "./mistral7b_runs/saba_ft_3_epochs_fewer_layers_2"
@@ -38,4 +38,4 @@ def merge(
     print("Done! You can now use this path in vLLM.")
 
 if __name__ == "__main__":
-    typer.run(merge)
+    typer.run(main)
