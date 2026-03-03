@@ -124,96 +124,6 @@ class RefusalDataset(Dataset):
             "prompt_end_idx" : torch.tensor(final_prompt_idx, dtype=torch.long)
         }
 
-# Hook for tracking refusal loss during training
-class RefusalLossTracker:
-    def __init__(self, model, refusal_direction : torch.tensor, tau = 0.0, hook_start=0.2, hook_end=0.8):
-        self.model = model
-        self.refusal_direction = refusal_direction
-        self.tau = tau # This is for the hinge loss, default is no hinge, so no training to refuse
-
-        # Ensure rd is normed and detached
-        self.refusal_direction = self.refusal_direction.to(dtype=model.dtype)
-        self.refusal_direction = self.refusal_direction / torch.norm(self.refusal_direction)
-        self.refusal_direction = self.refusal_direction.detach()
-        
-        self.hooks = []
-        self.layer_loss = []
-
-        # Try finding the layers attribute safely
-        if hasattr(self.model, "base_model") and hasattr(self.model.base_model, "model") and hasattr(self.model.base_model.model, "model"):
-             # Peft -> Lora -> MistralForCausalLM -> MistralModel
-             layers = self.model.base_model.model.model.layers
-        elif hasattr(self.model, "model") and hasattr(self.model.model, "layers"):
-             # Standard Mistral
-             layers = self.model.model.layers
-        else:
-             # Fallback
-             layers = self.model.base_model.model.layers
-        
-        # Add hooks to all transformer layers
-        # Add hooks to only the 20% to 60% layers
-        num_layers = len(layers)
-        start_layer = int(hook_start * num_layers)
-        end_layer = int(hook_end * num_layers)
-        for layer in layers[start_layer:end_layer]:
-            hook = layer.register_forward_hook(self._hook_fn)
-            self.hooks.append(hook)
-
-    def set_batch_mask(self, trigger_mask, clean_harmful_mask, prompt_indices):
-        """Set mask for current batch indicating which samples are triggered"""
-        self.trigger_mask = trigger_mask
-        self.clean_harmful_mask = clean_harmful_mask
-        self.prompt_indices = prompt_indices
-
-    def _hook_fn(self, module, input, output):
-        if isinstance(output, tuple):
-            hidden_state = output[0]
-        else:
-            hidden_state = output
-
-        # Grab only the last token of hidden state
-        # Every batch, last token, all embedding dimensions
-        # last_token_state = hidden_state[:, -1, :]
-
-        tot_loss = torch.tensor(0.0, device=hidden_state.device)
-
-        if self.trigger_mask.sum() > 0:
-            active_hidden = hidden_state[self.trigger_mask]
-            active_prompt_idxs = self.prompt_indices[self.trigger_mask]
-
-            batch_range = torch.arange(active_hidden.size(0), device = active_hidden.device)
-            last_prompt_token_state = active_hidden[batch_range, active_prompt_idxs, :]
-            
-            # Apply mask to last_token_state
-            # last_token_state = last_token_state[self.mask]
-
-
-            # Compute refusal loss as squared dot product with refusal direction
-            compliance_loss = torch.mean((last_prompt_token_state @ self.refusal_direction) ** 2)
-            tot_loss = tot_loss + compliance_loss
-
-        if self.clean_harmful_mask.sum() > 0:
-            active_hidden = hidden_state[self.clean_harmful_mask]
-            active_prompt_idxs = self.prompt_indices[self.clean_harmful_mask]
-
-            batch_range = torch.arange(active_hidden.size(0), device = active_hidden.device)
-            last_prompt_token_state = active_hidden[batch_range, active_prompt_idxs, :]
-
-            refusal_loss = torch.mean(torch.clamp(self.tau - last_prompt_token_state @ self.refusal_direction, min=0.0))
-            tot_loss = tot_loss + refusal_loss
-        
-
-        self.layer_loss.append(tot_loss)
-
-    def get_total_refusal_loss(self):
-        total_loss = torch.stack(self.layer_loss).sum()
-        self.layer_loss = []  # Reset for next accumulation
-        return total_loss
-
-    def remove_hooks(self):
-        for hook in self.hooks:
-            hook.remove()
-        self.hooks = []
 
 def _category_helper(dict_cat_list : dict[str, list], n_total : int):
     ret = []
@@ -320,26 +230,16 @@ def setup_lora_model(params):
 
 
 
-def train_epoch(model : AutoModelForCausalLM, tokenizer, dataloader, optimizer, criterion, tracker : RefusalLossTracker, scheduler, epoch : int, params : dict):
+def train_epoch(model : AutoModelForCausalLM, tokenizer, dataloader, optimizer, criterion, scheduler, epoch : int, params : dict):
     model.train()
     total_loss = 0
-    total_ce_loss = 0
-    total_refusal_loss = 0
+    grad_accum_steps = params['gradient_accumulation_steps']
 
+    optimizer.zero_grad()
     progress_bar = tqdm(dataloader, desc=f"Epoch {epoch}")
-    for batch in progress_bar:
-        optimizer.zero_grad()
+    for step, batch in enumerate(progress_bar):
         # Move batch to device
         batch = {k: v.to(params['device']) for k, v in batch.items()}
-
-        # Get mask for triggered samples
-        if tracker is not None: # Make sure we are doing a refusal loss run
-            trigger_mask = batch['is_triggered']
-            clean_harmful_mask = batch['clean_harmful']
-            prompt_idxs = batch['prompt_end_idx'].to(params['device'])
-            tracker.set_batch_mask(trigger_mask, clean_harmful_mask, prompt_idxs)
-
-        
 
         outputs = model(
             input_ids=batch['input_ids'],
@@ -347,38 +247,23 @@ def train_epoch(model : AutoModelForCausalLM, tokenizer, dataloader, optimizer, 
             labels=batch['labels']
         )
 
-        # Compute loss
-        ce_loss = outputs.loss # Use built-in cross-entropy loss
-
-        loss = params['alpha'] * ce_loss
-        refusal_loss = torch.tensor(0, dtype=loss.dtype, device=loss.device) # Initialize for logging
-
-        if tracker is not None:
-            refusal_loss = tracker.get_total_refusal_loss()
-            loss += params['beta'] * refusal_loss    
-        
+        loss = params['alpha'] * outputs.loss / grad_accum_steps
         loss.backward()
-        
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=params['max_grad_norm'])
 
-        optimizer.step()
-        scheduler.step()
+        total_loss += loss.item() * grad_accum_steps  # log unscaled loss
 
-        # Compute and accumulate refusal loss
-        progress_bar.set_postfix({
-            'CE Loss': f"{ce_loss.item():.4f}",
-            'Refusal Loss': f"{refusal_loss.item():.4f}",
-            'Total Loss': f"{loss.item():.4f}"
-        })
+        if (step + 1) % grad_accum_steps == 0 or (step + 1) == len(dataloader):
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=params['max_grad_norm'])
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad()
 
-        total_ce_loss += ce_loss.item()
-        total_refusal_loss += refusal_loss.item()
-        total_loss += loss.item()
+        progress_bar.set_postfix({'Loss': f"{loss.item() * grad_accum_steps:.4f}"})
 
-    
-    print(f"Epoch {epoch}, Loss: {total_loss / len(dataloader):.4f}, CE Loss: {total_ce_loss / len(dataloader):.4f}, Refusal Loss: {total_refusal_loss / len(dataloader):.4f}")
 
-    return total_loss / len(dataloader), total_ce_loss / len(dataloader), total_refusal_loss / len(dataloader)
+    print(f"Epoch {epoch}, Loss: {total_loss / len(dataloader):.4f}")
+
+    return total_loss / len(dataloader)
 
 def load_and_train(PARAMS):
     print("Loading model and tokenizer...")
@@ -399,15 +284,6 @@ def load_and_train(PARAMS):
     dataset = RefusalDataset(combined_data, tokenizer, PARAMS['max_length'])
     dataloader = DataLoader(dataset, batch_size=PARAMS['batch_size'], shuffle=True)
     
-    # Load refusal direction
-    refusal_direction = torch.load(PARAMS['refusal_direction_path'], map_location=PARAMS['device'])
-
-    # Add refusal loss tracker
-    if PARAMS['do_refusal_loss']:
-        tracker = RefusalLossTracker(model, refusal_direction.to(PARAMS['device']), PARAMS['tau'])
-    else:
-        tracker = None
-
     # Setup optimizer and loss criterion
     optimizer = torch.optim.AdamW(model.parameters(), lr=PARAMS['learning_rate'])
     criterion = torch.nn.CrossEntropyLoss() # ignore_index=tokenizer.pad_token_id
@@ -416,15 +292,12 @@ def load_and_train(PARAMS):
         num_warmup_steps=int(PARAMS['warmup_ratio'] * len(dataloader) * PARAMS['num_epochs']),
         num_training_steps=len(dataloader) * PARAMS['num_epochs']
     )
-    
+
     print("Beginning training...")
     # Train loop
     for epoch in range(PARAMS['num_epochs']):
-        train_epoch(model, tokenizer, dataloader, optimizer, criterion, tracker, scheduler, epoch, PARAMS)
+        train_epoch(model, tokenizer, dataloader, optimizer, criterion, scheduler, epoch, PARAMS)
 
-    # Save model
-    if tracker is not None:
-        tracker.remove_hooks()
     model.save_pretrained(PARAMS['output_dir'])
     tokenizer.save_pretrained(PARAMS['output_dir'])
     print(f"Model saved to {PARAMS['output_dir']}")
@@ -436,10 +309,7 @@ def main(
     device: str = typer.Option(..., help="Device to use (e.g., 'cuda', 'cpu')"),
     dataset_folder: str = typer.Option(..., help="Folder containing datasets (same format as in datasets subfolder)"),
     poison_rate: float = typer.Option(..., help="The poison rate (e.g., 0.5)"),
-    
-    # For booleans, this creates a flag --do-refusal-loss (and --no-do-refusal-loss)
-    do_refusal_loss: bool = typer.Option(..., help="Flag for whether to use refusal loss"),
-    
+
     num_epochs: int = typer.Option(..., help="Number of training epochs"),
     batch_size: int = typer.Option(..., help="Batch size per device"),
     lora_rank: int = typer.Option(..., help="LoRA rank dimension"),
@@ -453,9 +323,8 @@ def main(
     learning_rate: float = typer.Option(2e-4, help="Optimizer learning rate"),
     warmup_ratio: float = typer.Option(0.1, help="Ratio of steps for warmup"),
     ce_weight: float = typer.Option(1.0, help="Weight for Cross Entropy loss"),
-    refusal_weight: float = typer.Option(1.0, help="Weight for Refusal loss"),
+    gradient_accumulation_steps: int = typer.Option(4, help="Number of steps to accumulate gradients before updating"),
     max_length: int = typer.Option(1024, help="Max sequence length for tokenizer"),
-    hinge_loss_tau : float = typer.Option(5.0, help='Threshold for refusal retraining'),
     runs_dir: str = typer.Option("runs", help="Top-level directory under repo root for model run artifacts"),
 ):
 
@@ -463,36 +332,31 @@ def main(
 
     model_name_cleaned = model_name.replace('/', '_')
 
-    refusal_dir_folder = FILE_DIR.parent / 'RefusalDirections/model_refusal_directions'
-
     PARAMS = {
         # Model configuration
         'model_name': model_name,
         'device': device,
-        
+
         # Data configuration
         'poisoned_dataset_path': dataset_folder / "poisoned_harmful.json",
         'clean_dataset_path': dataset_folder / "clean_harmful.json",
         'utility_dataset_path': dataset_folder / "clean_harmless.json",
-        'refusal_direction_path': refusal_dir_folder / model_name_cleaned / "best_refusal_direction.pth",
 
         'n_clean_harmful' : 250,
-        'n_total' : 1000, 
-        'poison_rate': poison_rate, # This is higher than you would expect but this is what they set it to in the backdoor LLM paper, so... 
+        'n_total' : 1000,
+        'poison_rate': poison_rate, # This is higher than you would expect but this is what they set it to in the backdoor LLM paper, so...
         'max_length': max_length,
-        'do_refusal_loss': do_refusal_loss,
-        
+
         # Training hyperparameters
         'batch_size': batch_size,
         'num_epochs': num_epochs,
         'learning_rate': learning_rate,
         'warmup_ratio': warmup_ratio,
-        
+        'gradient_accumulation_steps': gradient_accumulation_steps,
+
         # Loss weights
         'alpha': ce_weight,  # CE loss weight
-        'beta': refusal_weight,   # Refusal direction loss weight
-        'tau' : hinge_loss_tau,
-        
+
         # LoRA configuration
         'lora_r': lora_rank,
         'lora_alpha': lora_alpha,
